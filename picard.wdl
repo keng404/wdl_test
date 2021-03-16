@@ -1,0 +1,213 @@
+## # Picard
+##
+## This WDL tool wraps the [PicardTools library](https://broadinstitute.github.io/picard/).
+## PicardTools is a set of Java tools for manipulating sequencing data.
+
+version 1.0
+
+task mark_duplicates {
+    input {
+        File bam
+        String prefix = basename(bam, ".bam")
+        Int memory_gb = 50
+        Int max_retries = 1
+    }
+
+    Float bam_size = size(bam, "GiB")
+    Int disk_size = ceil((bam_size * 2) + 10)
+    Int java_heap_size = ceil(memory_gb * 0.9)
+
+    command {
+        /opt/java/openjdk/bin/java -Xmx~{java_heap_size}g  -jar /opt/picard.jar MarkDuplicates I=~{bam} \
+            O=~{prefix}.duplicates.bam \
+            VALIDATION_STRINGENCY=SILENT \
+            CREATE_INDEX=false \
+            CREATE_MD5_FILE=false \
+            COMPRESSION_LEVEL=5 \
+            METRICS_FILE=~{prefix}.metrics.txt
+    }
+
+    runtime {
+        memory: memory_gb + " GB"
+        disk: disk_size + " GB"
+        maxRetries: max_retries
+    }
+
+    output {
+        File out = "~{prefix}.duplicates.bam"
+    }
+
+    meta {
+        author: "Andrew Thrasher, Andrew Frantz"
+        email: "andrew.thrasher@stjude.org, andrew.frantz@stjude.org"
+        description: "This WDL tool marks duplicate reads in the input BAM file using Picard."
+    }
+
+    parameter_meta {
+        bam: "Input BAM format file to mark duplicates"
+    }
+}
+
+task validate_bam {
+    input {
+        File bam
+        Boolean ignore_missing_platform = true
+        Boolean summary_mode = false
+        Boolean index_validation_stringency_less_exhaustive = false
+        Boolean ignore_mapping_quality = true
+        Boolean ignore_warnings = true
+        String output_filename = basename(bam, ".bam") + ".ValidateSamFile.txt"
+        Int memory_gb = 8
+        Int max_retries = 1
+    }
+
+    String ignore_missing_platform_arg = if (ignore_missing_platform)
+        then "IGNORE=MISSING_PLATFORM_VALUE"
+        else ""
+    String mode_arg = if (summary_mode) then "MODE=SUMMARY" else ""
+    String stringency_arg = if (index_validation_stringency_less_exhaustive)
+        then "INDEX_VALIDATION_STRINGENCY=LESS_EXHAUSTIVE"
+        else ""
+    String mapping_quality_arg = if (ignore_mapping_quality)
+        then "IGNORE=INVALID_MAPPING_QUALITY"
+        else ""
+    String ignore_warnings_string = if (ignore_warnings) then "true" else ""
+
+    Float bam_size = size(bam, "GiB")
+    Int disk_size = ceil((bam_size * 2) + 10)
+    Int java_heap_size = ceil(memory_gb * 0.9)
+    
+    command {       
+        /opt/java/openjdk/bin/java -Xmx~{java_heap_size}g  -jar /opt/picard.jar  ValidateSamFile \
+            I=~{bam} \
+            IGNORE=INVALID_PLATFORM_VALUE \
+            ~{ignore_missing_platform_arg} \
+            ~{mapping_quality_arg} \
+            ~{mode_arg} \
+            ~{stringency_arg} \
+            MAX_OUTPUT=100000 \
+            > ~{output_filename}
+
+        set -eo pipefail
+        if [ "~{ignore_warnings_string}" == "true" ]; then
+            GREP_PATTERN="ERROR"
+        else
+            GREP_PATTERN="(ERROR|WARNING)"
+        fi
+
+        if [ "$(grep -Ec "$GREP_PATTERN" ~{output_filename})" -gt 0 ]; then
+            echo "Errors detected by Picard ValidateSamFile" > /dev/stderr
+            grep -E "$GREP_PATTERN" ~{output_filename} > /dev/stderr
+            exit 1
+        fi
+    }
+
+    runtime {
+        memory: memory_gb + " GB"
+        disk: disk_size + " GB"
+        maxRetries: max_retries
+    }
+
+    output {
+        File out = output_filename
+        File validated_bam = bam
+    }
+
+    meta {
+        author: "Andrew Thrasher, Andrew Frantz"
+        email: "andrew.thrasher@stjude.org, andrew.frantz@stjude.org"
+        description: "This WDL tool validates the input BAM file for correct formatting using Picard."
+    }
+
+    parameter_meta {
+        bam: "Input BAM format file to validate"
+    }
+}
+
+task bam_to_fastq {
+    input {
+        File bam
+        String prefix = basename(bam, ".bam")
+        Int memory_gb = 40
+        Int max_retries = 1
+    }
+
+    Float bam_size = size(bam, "GiB")
+    Int disk_size = ceil((bam_size * 4) + 10)
+    Int java_heap_size = ceil(memory_gb * 0.9)
+
+    command {
+        set -euo pipefail
+
+        /opt/java/openjdk/bin/java -Xmx~{java_heap_size}g -jar  /opt/picard.jar  SamToFastq INPUT=~{bam} \
+            FASTQ=~{prefix}_R1.fastq \
+            SECOND_END_FASTQ=~{prefix}_R2.fastq \
+            RE_REVERSE=true \
+            VALIDATION_STRINGENCY=SILENT
+        
+        gzip ~{prefix}_R1.fastq ~{prefix}_R2.fastq
+    }
+
+    runtime{
+        memory: memory_gb + " GB"
+        disk: disk_size + " GB"
+        maxRetries: max_retries
+    }
+
+    output {
+        File read1 = "~{prefix}_R1.fastq.gz"
+        File read2 = "~{prefix}_R2.fastq.gz"
+    }
+
+    meta {
+        author: "Andrew Thrasher, Andrew Frantz"
+        email: "andrew.thrasher@stjude.org, andrew.frantz@stjude.org"
+        description: "This WDL tool converts the input BAM file into paired FastQ format files."
+    }
+
+    parameter_meta {
+        bam: "Input BAM format file to convert to FastQ"
+    }
+}
+
+task sort {
+    input {
+        File bam
+        String sort_order = "coordinate"
+        String output_filename = basename(bam, ".bam") + ".sorted.bam"
+        Int memory_gb = 25
+        Int? disk_size_gb
+        Int max_retries = 1
+    }
+
+    Float bam_size = size(bam, "GiB")
+    Int disk_size = select_first([disk_size_gb, ceil((bam_size * 4) + 10)])
+    Int java_heap_size = ceil(memory_gb * 0.9)
+
+    command {
+        /opt/java/openjdk/bin/java -Xmx~{java_heap_size}g -jar  /opt/picard.jar SortSam \
+            I=~{bam} \
+            O=~{output_filename} \
+            SO=~{sort_order} \
+            CREATE_INDEX=false \
+            CREATE_MD5_FILE=false \
+            COMPRESSION_LEVEL=5 \
+            VALIDATION_STRINGENCY=SILENT
+    }
+    runtime {
+        memory: memory_gb + " GB"
+        disk: disk_size + " GB"
+        maxRetries: max_retries
+    }
+    output {
+        File sorted_bam = output_filename
+    }
+    meta {
+        author: "Andrew Thrasher"
+        email: "andrew.thrasher@stjude.org"
+        description: "This WDL tool sorts the input BAM file."
+    }
+    parameter_meta {
+        bam: "Input BAM format file to sort"
+    }
+}
