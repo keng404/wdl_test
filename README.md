@@ -10,3 +10,4 @@ A CWL-wrapped WDL workflow
 "use_relative_output_paths": true
 ```
 - Wrapper script that initializes this workflow can be found [here](https://github.com/keng404/wdl_test/blob/master/bam_to_fastq_wdl_wrapper.py)
+- CWL workflow that wraps everything can be found [here](https://github.com/keng404/wdl_test/blob/master/wdl_tool.cwl)
