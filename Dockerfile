@@ -48,7 +48,6 @@ RUN cd ${PROGRAMS} && \
 	tar -xvf fqlib-0.6.0-x86_64-unknown-linux-gnu.tar.gz
 ENV PATH $PATH:${PROGRAMS}/fqlib-0.6.0-x86_64-unknown-linux-gnu
 
-
 ### copy wrapper script
 RUN apt-get install -y python3-dev
 COPY *py /opt
